@@ -2,8 +2,10 @@ import ox.scl._
 
 object P1 {
     def main(args: Array[String]): Unit = {
-        insertTest(5000)
-        insertionSortTest(5000)
+        comparatorTest(10)
+        sort4Test()
+        insertTest(10)
+        insertionSortTest(10)
     }
 
     def comparator(in0: ??[Int], in1: ??[Int], out0: !![Int], out1: !![Int]): ThreadGroup = thread {
@@ -24,34 +26,26 @@ object P1 {
         out1.endOfStream
         // Cleanly closes the channels in case one left open
     }
-    
-    def sort4(ins: List[??[Int]], outs: List [!![Int]]) : ThreadGroup = {
+    def sort4(ins: List[??[Int]], outs: List[!![Int]]) : ThreadGroup = {
         require(ins.length == 4 && outs.length == 4)
-        val in00, in01, in10, in11, out00, out01, out10, out11 = new SyncChan[Int]
-        val c0 = comparator(in00, in01, out00, out01)
-        val c1 = comparator(in10, in11, out10, out11)
-        var x0, x1, x2, x3 = 0
-        c0 || c1 || thread {
-            repeat {
-                // Setting up the comparators
-                x0 = ins(0)?(); x1 = ins(1)?(); x2 = ins(2)?(); x3 = ins(3)?()
+        val currentOuts = new Array[SyncChan[Int]](4)
+        currentOuts(0) = new SyncChan[Int]; currentOuts(2) = new SyncChan[Int]
+        var outGroup = comparator(ins(0),ins(2),currentOuts(0),currentOuts(2))
+        currentOuts(1) = new SyncChan[Int]; currentOuts(3) = new SyncChan[Int]
+        outGroup = outGroup || comparator(ins(1),ins(3),currentOuts(1),currentOuts(3))
 
-                in00!x0; in01!x2; in10!x1; in11!x3  // First concurrent step
-                x0 = out00?(); x2 = out01?(); x1 = out10?(); x3 = out11?()
+        var temp1 = currentOuts(0); var temp2 = currentOuts(1)
+        currentOuts(1) = new SyncChan[Int]
+        outGroup = outGroup || comparator(temp1,temp2,outs(0),currentOuts(1))
+        temp1 = currentOuts(2); temp2 = currentOuts(3)
+        currentOuts(2) = new SyncChan[Int]
+        outGroup = outGroup || comparator(temp1,temp2,currentOuts(2),outs(3))
 
-                in00!x0; in01!x1; in10!x2; in11!x3  // Second concurrent step
-                x0 = out00?(); x1 = out01?(); x2 = out10?(); x3 = out11?()
+        temp1 = currentOuts(1); temp2 = currentOuts(2)
+        outGroup = outGroup || comparator(temp1,temp2,outs(1),outs(2))
 
-                in00!x1; in01!x2  // orders x1 and x2 (last step)
-                x1 = out00?(); x2 = out01?()
-                outs(0)!x0; outs(1)!x1; outs(2)!x2; outs(3)!x3
-            }  
-            in00.endOfStream; in10.endOfStream  // Closes all channels
-            ins(0).close; ins(1).close; ins(2).close; ins(3).close
-            outs(0).endOfStream; outs(1).endOfStream; outs(2).endOfStream; outs(3).endOfStream
-        }
+        outGroup
     }
-    
 
     def insert(ins: List[??[Int]], in: ??[Int], outs: List [!![Int]]) : ThreadGroup = {
         val n = ins.length; require(n >= 1 && outs.length == n+1)
@@ -96,10 +90,23 @@ object P1 {
                     outs(i+1).endOfStream
                 }
             }
+            insert(newOuts,
             
         }
     }
-    
+
+
+    def sender(out: !![Int], x:Int) = thread{
+        out!(x)
+        out.endOfStream
+    }
+    def receiver(ins: List[??[Int]], xs: Array[Int]) = thread{
+        val x0 = ins(0)?(); val x1 = ins(1)?(); val x2 = ins(2)?(); val x3 = ins(3)?()
+        val doneArr = Array[Int](x0,x1,x2,x3)
+        //println(x0);println(x1);;println(x2);println(x3);
+        assert(xs.sorted.sameElements(doneArr))
+    } 
+
     def insertionSort(ins: List[??[Int]], outs: List[!![Int]]) : ThreadGroup = {
         val n = ins.length; require(n >= 2 && outs.length == n)
         
@@ -133,6 +140,36 @@ object P1 {
             } || insertionSort(newIns, newOuts)
         }
     }
+
+    def comparatorTest(n: Int): Unit = {
+        val rand = new scala.util.Random
+        var y1, y2 = 0
+        for (i <- 0 until n) { 
+            val in0, in1, out0, out1 = new SyncChan[Int]
+            val cp = comparator(in0, in1, out0, out1)
+
+            val x1 = rand.nextInt; val x2 = rand.nextInt
+            run(thread {in0!x1; in1!x2; in0.endOfStream; in1.endOfStream} || cp || thread { y1 = out0?(); y2 = out1?();  out0.close; out1.close})
+            assert(y1<=y2)
+
+        }
+        print("Test complete")
+    }
+    def sort4Test() = {
+        val rand = new scala.util.Random
+
+        for (_ <- 0 until 1000){
+            val max = 100
+            val xs = Array.fill(4)(rand.nextInt(max))
+            val ins = List.fill(4)(new SyncChan[Int])
+            val outs = List.fill(4)(new SyncChan[Int])
+            val testThread = sender(ins(0),xs(0)) || sender(ins(1),xs(1)) || sender(ins(2),xs(2)) || sender(ins(3),xs(3)) || sort4(ins, outs) || receiver(outs, xs)
+            run(testThread)
+        }
+        println("Tests complete")
+    }
+
+
 
     def insertTest(n: Int): Unit = {
         // Initialising test variables
@@ -199,7 +236,7 @@ object P1 {
                     }
                 } || insertionSort(testIns, testOuts) || thread {
                     for (j <- 0 until tasksize) {
-                        if (sortList(j) != testOuts(j)?()) println("Error found")
+                        if (sortList(j) != testOuts(j)?()) println("Error found") 
                     }
                 }
             )
